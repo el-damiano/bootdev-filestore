@@ -64,18 +64,12 @@ func (cfg *apiConfig) handlerUploadThumbnail(w http.ResponseWriter, r *http.Requ
 		return
 	}
 
-	videoThumbnails[videoID] = thumbnail{
-		data:      data,
-		mediaType: mediaType,
-	}
-
 	thumbnailEncoded := base64.StdEncoding.EncodeToString(data)
 	dataURL := fmt.Sprintf("data:%s;base64,%s", mediaType, thumbnailEncoded)
 	video.ThumbnailURL = &dataURL
 
 	err = cfg.db.UpdateVideo(video)
 	if err != nil {
-		delete(videoThumbnails, videoID)
 		respondWithError(w, http.StatusBadRequest, "foo", err)
 		return
 	}

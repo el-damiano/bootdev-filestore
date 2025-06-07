@@ -3,10 +3,8 @@ package main
 import (
 	"fmt"
 	"io"
-	"mime"
 	"net/http"
 	"os"
-	"path/filepath"
 
 	"github.com/bootdotdev/learn-file-storage-s3-golang-starter/internal/auth"
 	"github.com/google/uuid"
@@ -60,26 +58,22 @@ func (cfg *apiConfig) handlerUploadThumbnail(w http.ResponseWriter, r *http.Requ
 		return
 	}
 
-	fileExtension, err := mime.ExtensionsByType(mediaType)
-	if err != nil {
-		respondWithError(w, http.StatusInternalServerError, "Couldn't determine extension", err)
-		return
-	}
+	assetPath := getAssetPath(videoID, mediaType)
+	assetDiskPath := cfg.getAssetDiskPath(assetPath)
 
-	filePath := filepath.Join(cfg.assetsRoot, videoIDString+fileExtension[0])
-	fileDisk, err := os.Create(filePath)
+	assetOnDisk, err := os.Create(assetDiskPath)
 	if err != nil {
 		respondWithError(w, http.StatusInternalServerError, "Couldn't create thumbnail", err)
 		return
 	}
 
-	_, err = io.Copy(fileDisk, file)
+	_, err = io.Copy(assetOnDisk, file)
 	if err != nil {
 		respondWithError(w, http.StatusInternalServerError, "Couldn't save thumbnail", err)
 		return
 	}
 
-	thumbnailURL := fmt.Sprintf("http://localhost:%s/assets/%s%s", cfg.port, videoID, fileExtension[0])
+	thumbnailURL := cfg.getAssetURL(assetPath)
 	video.ThumbnailURL = &thumbnailURL
 
 	err = cfg.db.UpdateVideo(video)

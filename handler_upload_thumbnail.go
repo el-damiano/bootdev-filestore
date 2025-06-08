@@ -3,6 +3,7 @@ package main
 import (
 	"fmt"
 	"io"
+	"log"
 	"mime"
 	"net/http"
 	"os"
@@ -79,12 +80,25 @@ func (cfg *apiConfig) handlerUploadThumbnail(w http.ResponseWriter, r *http.Requ
 	}
 
 	thumbnailURL := cfg.getAssetURL(assetPath)
+	thumbnailURLOld := *video.ThumbnailURL
 	video.ThumbnailURL = &thumbnailURL
 
 	err = cfg.db.UpdateVideo(video)
 	if err != nil {
 		respondWithError(w, http.StatusInternalServerError, "Couldn't update video", err)
 		return
+	}
+
+	assedOnDiskOld, err := cfg.getAssetDiskPathFromURL(thumbnailURLOld)
+	if err != nil {
+		log.Println(err)
+	} else {
+		if assedOnDiskOld != "" {
+			err = os.Remove(assedOnDiskOld)
+			if err != nil {
+				log.Printf("Couldn't delete old thumbnail: %v", err)
+			}
+		}
 	}
 
 	respondWithJSON(w, http.StatusOK, video)

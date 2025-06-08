@@ -36,6 +36,15 @@ func (cfg apiConfig) getAssetURL(assetPath string) string {
 	return fmt.Sprintf("http://localhost:%s/assets/%s", cfg.port, assetPath)
 }
 
+func (cfg apiConfig) getAssetDiskPathFromURL(assetURL string) (string, error) {
+	urlBase := fmt.Sprintf("http://localhost:%s/", cfg.port)
+	_, assetDiskPath, ok := strings.Cut(assetURL, urlBase)
+	if !ok {
+		return "", fmt.Errorf("Invalid asset URL. Missing expected base URL")
+	}
+	return assetDiskPath, nil
+}
+
 func mediaTypeToExt(mediaType string) string {
 	parts := strings.Split(mediaType, "/")
 	if len(parts) != 2 {

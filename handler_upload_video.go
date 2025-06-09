@@ -8,13 +8,15 @@ import (
 	"net/http"
 	"os"
 
+	"github.com/aws/aws-sdk-go-v2/aws"
 	"github.com/aws/aws-sdk-go-v2/service/s3"
 	"github.com/bootdotdev/learn-file-storage-s3-golang-starter/internal/auth"
 	"github.com/google/uuid"
 )
 
 func (cfg *apiConfig) handlerUploadVideo(w http.ResponseWriter, r *http.Request) {
-	r.Body = http.MaxBytesReader(w, r.Body, 1<<30)
+	const uploadLimit = 1 << 30
+	r.Body = http.MaxBytesReader(w, r.Body, uploadLimit)
 
 	videoIDString := r.PathValue("videoID")
 	videoID, err := uuid.Parse(videoIDString)
@@ -66,30 +68,39 @@ func (cfg *apiConfig) handlerUploadVideo(w http.ResponseWriter, r *http.Request)
 
 	fileTmp, err := os.CreateTemp("", "tubely-upload.mp4")
 	if err != nil {
-		respondWithError(w, http.StatusInternalServerError, "Couldn't save video", err)
+		respondWithError(w, http.StatusInternalServerError, "Couldn't create temp file", err)
 	}
 	defer os.Remove(fileTmp.Name())
 	defer fileTmp.Close()
 
 	_, err = io.Copy(fileTmp, file)
 	if err != nil {
-		respondWithError(w, http.StatusInternalServerError, "Couldn't save video", err)
+		respondWithError(w, http.StatusInternalServerError, "Couldn't save video to disk", err)
 		return
 	}
 
-	fileTmp.Seek(0, io.SeekStart)
+	_, err = fileTmp.Seek(0, io.SeekStart)
+	if err != nil {
+		respondWithError(w, http.StatusInternalServerError, "Couldn't reset file pointer", err)
+		return
+	}
+
 	fileKey := getAssetPath(mediaType)
 
 	params := s3.PutObjectInput{
-		Bucket:      &cfg.s3Bucket,
-		Key:         &fileKey,
+		Bucket:      aws.String(cfg.s3Bucket),
+		Key:         aws.String(fileKey),
 		Body:        fileTmp,
-		ContentType: &mediaType,
+		ContentType: aws.String(mediaType),
 	}
 
-	cfg.s3Client.PutObject(context.Background(), &params)
+	_, err = cfg.s3Client.PutObject(context.Background(), &params)
+	if err != nil {
+		respondWithError(w, http.StatusInternalServerError, "Error uploading file to S3", err)
+		return
+	}
 
-	fileURL := fmt.Sprintf("https://%s.s3.%s.amazonaws.com/%s", cfg.s3Bucket, cfg.s3Region, fileKey)
+	fileURL := cfg.getObjectURL(fileKey)
 	video.VideoURL = &fileURL
 	err = cfg.db.UpdateVideo(video)
 	if err != nil {

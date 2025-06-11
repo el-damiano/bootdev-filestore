@@ -4,13 +4,15 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
-	"log"
+	"math"
 	"mime"
 	"net/http"
 	"os"
 	"os/exec"
+	"path/filepath"
 
 	"github.com/aws/aws-sdk-go-v2/aws"
 	"github.com/aws/aws-sdk-go-v2/service/s3"
@@ -96,20 +98,19 @@ func (cfg *apiConfig) handlerUploadVideo(w http.ResponseWriter, r *http.Request)
 		return
 	}
 
-	fileKey := getAssetPath(mediaType)
-
-	prefixKey := "other/"
+	prefixKey := "other"
 	if aspectRatio == "16:9" {
-		prefixKey = "landscape/"
+		prefixKey = "landscape"
 	} else if aspectRatio == "9:16" {
-		prefixKey = "portrait/"
+		prefixKey = "portrait"
 	}
 
-	key := prefixKey + fileKey
+	fileKey := getAssetPath(mediaType)
+	fileKey = filepath.Join(prefixKey, fileKey)
 
 	params := s3.PutObjectInput{
 		Bucket:      aws.String(cfg.s3Bucket),
-		Key:         aws.String(key),
+		Key:         aws.String(fileKey),
 		Body:        fileTmp,
 		ContentType: aws.String(mediaType),
 	}
@@ -120,7 +121,7 @@ func (cfg *apiConfig) handlerUploadVideo(w http.ResponseWriter, r *http.Request)
 		return
 	}
 
-	fileURL := cfg.getObjectURL(key)
+	fileURL := cfg.getObjectURL(fileKey)
 	video.VideoURL = &fileURL
 	err = cfg.db.UpdateVideo(video)
 	if err != nil {
@@ -132,11 +133,17 @@ func (cfg *apiConfig) handlerUploadVideo(w http.ResponseWriter, r *http.Request)
 }
 
 func getVideoAspectRatio(filePath string) (string, error) {
-	cmd := exec.Command("ffprobe", "-v", "error", "-print_format", "json", "-show_streams", filePath)
-	log.Printf(">>> command: %v", cmd)
+	cmd := exec.Command(
+		"ffprobe",
+		"-v",
+		"error",
+		"-print_format",
+		"json",
+		"-show_streams",
+		filePath)
 
-	var b bytes.Buffer
-	cmd.Stdout = &b
+	var stdout bytes.Buffer
+	cmd.Stdout = &stdout
 
 	err := cmd.Run()
 	if err != nil {
@@ -147,44 +154,28 @@ func getVideoAspectRatio(filePath string) (string, error) {
 		Streams []struct {
 			Width  int `json:"width,omitempty"`
 			Height int `json:"height,omitempty"`
-		}
+		} `json:"streams"`
 	}
 
-	err = json.Unmarshal(b.Bytes(), &videoInfo)
+	err = json.Unmarshal(stdout.Bytes(), &videoInfo)
 	if err != nil {
-		return "", err
+		return "", fmt.Errorf("Couldn't parse ffprobe output: %v", err)
 	}
-	log.Printf(">>> aspect ratio: %v", videoInfo)
+
+	if len(videoInfo.Streams) == 0 {
+		return "", errors.New("No video streams found")
+	}
 
 	width := videoInfo.Streams[0].Width
 	height := videoInfo.Streams[0].Height
 
-	if width < 1 || height < 1 {
-		return "", fmt.Errorf("Couldn't get aspect ratio, streams invalid width/height")
+	sizeRatio := float64(width) / float64(height)
+	if math.Abs(sizeRatio-1.777) < 0.2 {
+		return "16:9", nil
+	} else if math.Abs(sizeRatio-0.5625) < 0.2 {
+		return "9:16", nil
+	} else {
+		return "other", nil
 	}
 
-	gcd := gcd(width, height)
-	widthRatio := int(width / gcd)
-	heightRatio := int(height / gcd)
-
-	aspectRatioString := "other"
-
-	if widthRatio == 16 && heightRatio == 9 {
-		aspectRatioString = "16:9"
-	} else if widthRatio == 9 && heightRatio == 16 {
-		aspectRatioString = "9:16"
-	}
-
-	return aspectRatioString, nil
-}
-
-func gcd(a, b int) int {
-	if b != 0 {
-		r := a % b
-		if r == 0 {
-			return b
-		}
-		return gcd(b, r)
-	}
-	return a
 }

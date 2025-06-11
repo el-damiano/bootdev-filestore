@@ -1,12 +1,16 @@
 package main
 
 import (
+	"bytes"
 	"context"
+	"encoding/json"
 	"fmt"
 	"io"
+	"log"
 	"mime"
 	"net/http"
 	"os"
+	"os/exec"
 
 	"github.com/aws/aws-sdk-go-v2/aws"
 	"github.com/aws/aws-sdk-go-v2/service/s3"
@@ -66,7 +70,8 @@ func (cfg *apiConfig) handlerUploadVideo(w http.ResponseWriter, r *http.Request)
 
 	fmt.Println("uploading video", videoID, "by user", userID)
 
-	fileTmp, err := os.CreateTemp("", "tubely-upload.mp4")
+	const fileTmpPath = "tubely-upload.mp4"
+	fileTmp, err := os.CreateTemp("", fileTmpPath)
 	if err != nil {
 		respondWithError(w, http.StatusInternalServerError, "Couldn't create temp file", err)
 	}
@@ -85,11 +90,26 @@ func (cfg *apiConfig) handlerUploadVideo(w http.ResponseWriter, r *http.Request)
 		return
 	}
 
+	aspectRatio, err := getVideoAspectRatio(fileTmp.Name())
+	if err != nil {
+		respondWithError(w, http.StatusInternalServerError, "Couldn't calculate aspect ratio", err)
+		return
+	}
+
 	fileKey := getAssetPath(mediaType)
+
+	prefixKey := "other/"
+	if aspectRatio == "16:9" {
+		prefixKey = "landscape/"
+	} else if aspectRatio == "9:16" {
+		prefixKey = "portrait/"
+	}
+
+	key := prefixKey + fileKey
 
 	params := s3.PutObjectInput{
 		Bucket:      aws.String(cfg.s3Bucket),
-		Key:         aws.String(fileKey),
+		Key:         aws.String(key),
 		Body:        fileTmp,
 		ContentType: aws.String(mediaType),
 	}
@@ -100,7 +120,7 @@ func (cfg *apiConfig) handlerUploadVideo(w http.ResponseWriter, r *http.Request)
 		return
 	}
 
-	fileURL := cfg.getObjectURL(fileKey)
+	fileURL := cfg.getObjectURL(key)
 	video.VideoURL = &fileURL
 	err = cfg.db.UpdateVideo(video)
 	if err != nil {
@@ -109,4 +129,62 @@ func (cfg *apiConfig) handlerUploadVideo(w http.ResponseWriter, r *http.Request)
 	}
 
 	respondWithJSON(w, http.StatusOK, video)
+}
+
+func getVideoAspectRatio(filePath string) (string, error) {
+	cmd := exec.Command("ffprobe", "-v", "error", "-print_format", "json", "-show_streams", filePath)
+	log.Printf(">>> command: %v", cmd)
+
+	var b bytes.Buffer
+	cmd.Stdout = &b
+
+	err := cmd.Run()
+	if err != nil {
+		return "", err
+	}
+
+	var videoInfo struct {
+		Streams []struct {
+			Width  int `json:"width,omitempty"`
+			Height int `json:"height,omitempty"`
+		}
+	}
+
+	err = json.Unmarshal(b.Bytes(), &videoInfo)
+	if err != nil {
+		return "", err
+	}
+	log.Printf(">>> aspect ratio: %v", videoInfo)
+
+	width := videoInfo.Streams[0].Width
+	height := videoInfo.Streams[0].Height
+
+	if width < 1 || height < 1 {
+		return "", fmt.Errorf("Couldn't get aspect ratio, streams invalid width/height")
+	}
+
+	gcd := gcd(width, height)
+	widthRatio := int(width / gcd)
+	heightRatio := int(height / gcd)
+
+	aspectRatioString := "other"
+
+	if widthRatio == 16 && heightRatio == 9 {
+		aspectRatioString = "16:9"
+	} else if widthRatio == 9 && heightRatio == 16 {
+		aspectRatioString = "9:16"
+	}
+
+	return aspectRatioString, nil
+}
+
+func gcd(a, b int) int {
+	if b != 0 {
+		r := a % b
+		if r == 0 {
+			return b
+		}
+		return gcd(b, r)
+	}
+	return a
 }

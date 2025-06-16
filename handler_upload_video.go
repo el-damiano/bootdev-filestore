@@ -204,9 +204,21 @@ func processVideoForFastStart(filepath string) (string, error) {
 		newPath,
 	)
 
+	var stderr bytes.Buffer
+	cmd.Stderr = &stderr
+
 	err := cmd.Run()
 	if err != nil {
-		return "", err
+		return "", fmt.Errorf("error processing video: %s, %v", stderr.String(), err)
+	}
+
+	fileInfo, err := os.Stat(newPath)
+	if err != nil {
+		return "", fmt.Errorf("could not stat processed video: %v", err)
+	}
+
+	if fileInfo.Size() < 1 {
+		return "", errors.New("processed video is empty")
 	}
 
 	return newPath, nil

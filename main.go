@@ -27,13 +27,11 @@ type apiConfig struct {
 	port             string
 }
 
-type thumbnail struct {
-	data      []byte
-	mediaType string
-}
-
 func main() {
-	godotenv.Load(".env")
+	err := godotenv.Load(".env")
+	if err != nil {
+		log.Fatal(".env file must exist")
+	}
 
 	pathToDB := os.Getenv("DB_PATH")
 	if pathToDB == "" {
